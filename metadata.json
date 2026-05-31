@@ -1,0 +1,8 @@
+{
+  "name": "Remix: FoodLink AI",
+  "description": "A zero-waste social platform connecting surplus food donors with NGOs, volunteers, and needy communities, powered by Gemini AI food analysis and real-time claims tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
