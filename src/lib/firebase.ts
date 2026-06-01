@@ -1,97 +1,11 @@
-import { initializeApp } from "firebase/app";
-import { 
-  getAuth, 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  signOut as fbSignOut, 
-  onAuthStateChanged,
-  User as FirebaseUser
-} from "firebase/auth";
-import { 
-  getFirestore, 
-  collection, 
-  doc, 
-  setDoc, 
-  getDoc, 
-  getDocs, 
-  addDoc, 
-  updateDoc, 
-  deleteDoc, 
-  onSnapshot, 
-  query, 
-  where, 
-  orderBy,
-  limit,
-  serverTimestamp,
-  getDocFromServer
-} from "firebase/firestore";
-import firebaseConfig from "../../firebase-applet-config.json";
 import { UserProfile, Donation, Claim, ImpactStats, AppNotification, LeaderboardEntry, UserRole } from "../types";
 
-// Determine if we should compile in fallback mock mode for local testing
-const IS_PLAYGROUND_MOCK = 
-  !firebaseConfig.apiKey || 
-  firebaseConfig.apiKey.includes("Placeholder") ||
-  firebaseConfig.apiKey === "MY_GEMINI_API_KEY";
+// Explicit mock state flag for local sandboxed execution
+const IS_PLAYGROUND_MOCK = true;
 
-let app;
-let db: any = null;
-let auth: any = null;
-let googleProvider: any = null;
-
-if (!IS_PLAYGROUND_MOCK) {
-  try {
-    app = initializeApp(firebaseConfig);
-    db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-    auth = getAuth(app);
-    googleProvider = new GoogleAuthProvider();
-  } catch (err) {
-    console.warn("Could not load real Firebase SDK clients. Falling back to local playground mode:", err);
-  }
-}
-
-export { db, auth };
-
-// -------------------------------------------------------------
-// FIRESTORE HARDENED ERROR HANDLING (Pillar 3 Error Guidelines)
-// -------------------------------------------------------------
-enum OperationType {
-  CREATE = "create",
-  UPDATE = "update",
-  DELETE = "delete",
-  LIST = "list",
-  GET = "get",
-  WRITE = "write",
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
-  const currentAuth = auth;
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: currentAuth?.currentUser?.uid || "anonymous",
-      email: currentAuth?.currentUser?.email || "none",
-      emailVerified: currentAuth?.currentUser?.emailVerified || false,
-      isAnonymous: currentAuth?.currentUser?.isAnonymous || false,
-    },
-    operationType,
-    path
-  };
-  console.error("Firestore Transaction Error: ", JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
+// Export dummy DB and Auth layers to maintain compatibility with other parts of the system if referenced
+export let db: any = null;
+export let auth: any = null;
 
 // -------------------------------------------------------------
 // PLAYGROUND LOCAL STORAGE ENGINE (For ultra-responsive zero-fail hackathon sandbox)
@@ -186,7 +100,7 @@ class LocalPlaygroundState {
           mealsSaved: 50,
           suggestedDescription: "Surplus premium caterer wedding buffet containing gourmet vegetable biryani, spiced samosas, and naan flatbread."
         },
-        price: 25.00, // Very low cost indeed compared to list value
+        price: 25.00,
         paymentEscrowState: "None"
       },
       {
@@ -234,7 +148,7 @@ class LocalPlaygroundState {
           mealsSaved: 30,
           suggestedDescription: "Continental breakfast portions including pastries, bread rolls, safely insulated eggs, and fresh mixed berry bowls."
         },
-        price: 15.00, // Very low symbolic price cover
+        price: 15.00,
         paymentEscrowState: "None"
       },
       {
@@ -301,7 +215,6 @@ class LocalPlaygroundState {
   }
 
   static getImpactStats(): ImpactStats {
-    const donations = this.getDonations();
     const claims = this.getClaims();
     
     const mealsSaved = claims.filter(c => c.status === "Collected").reduce((acc, c) => acc + parseInt(c.quantity) || 10, 0) + 120;
@@ -322,95 +235,43 @@ class LocalPlaygroundState {
 }
 
 // -------------------------------------------------------------
-// UNIFIED DATA-BROKER SERVICE WRAPPER
+// UNIFIED DATA-BROKER SERVICE WRAPPER (SANDBOXED Fallback Implementation)
 // -------------------------------------------------------------
 export const FoodLinkService = {
   isMock: IS_PLAYGROUND_MOCK,
 
   // Test client-server connection
   async testDatabaseConnection() {
-    if (IS_PLAYGROUND_MOCK || !db) return true;
-    try {
-      await getDocFromServer(doc(db, "test", "connection"));
-      return true;
-    } catch (error) {
-      console.warn("Firestore server reported connection issue, but is normal in local testing contexts:", error);
-    }
+    return true;
   },
 
   // Write/Update User Profile
   async saveUserProfile(userId: string, name: string, email: string, role: UserRole): Promise<UserProfile> {
-    if (IS_PLAYGROUND_MOCK || !db) {
-      const profiles = LocalPlaygroundState.getProfiles();
-      let match = profiles.find(p => p.uid === userId);
-      if (!match) {
-        match = {
-          uid: userId,
-          name,
-          email,
-          role,
-          points: 100,
-          badges: ["Food Hero"],
-          createdAt: new Date().toISOString()
-        };
-        profiles.push(match);
-      } else {
-        match.name = name;
-        match.role = role;
-      }
-      LocalPlaygroundState.saveProfiles(profiles);
-      return match;
+    const profiles = LocalPlaygroundState.getProfiles();
+    let match = profiles.find(p => p.uid === userId);
+    if (!match) {
+      match = {
+        uid: userId,
+        name,
+        email,
+        role,
+        points: 100,
+        badges: ["Food Hero"],
+        createdAt: new Date().toISOString()
+      };
+      profiles.push(match);
+    } else {
+      match.name = name;
+      match.role = role;
     }
-
-    const path = `users/${userId}`;
-    try {
-      const uRef = doc(db, "users", userId);
-      const userSnap = await getDoc(uRef);
-      let data: Partial<UserProfile>;
-      
-      if (!userSnap.exists()) {
-        data = {
-          uid: userId,
-          name,
-          email,
-          role,
-          points: 100,
-          badges: ["Food Hero"],
-          createdAt: new Date().toISOString()
-        };
-        await setDoc(uRef, data);
-      } else {
-        const current = userSnap.data() as UserProfile;
-        data = {
-          ...current,
-          name,
-          role
-        };
-        await updateDoc(uRef, { name, role });
-      }
-      return data as UserProfile;
-    } catch (err) {
-      return handleFirestoreError(err, OperationType.WRITE, path);
-    }
+    LocalPlaygroundState.saveProfiles(profiles);
+    return match;
   },
 
   // Get single User Profile
   async getUserProfile(userId: string): Promise<UserProfile | null> {
-    if (IS_PLAYGROUND_MOCK || !db) {
-      const p = LocalPlaygroundState.getProfiles().find(x => x.uid === userId);
-      return p || null;
-    }
-
-    const path = `users/${userId}`;
-    try {
-      const snap = await getDoc(doc(db, "users", userId));
-      if (snap.exists()) {
-        return { ...snap.data(), uid: userId } as UserProfile;
-      }
-      return null;
-    } catch (err) {
-      return handleFirestoreError(err, OperationType.GET, path);
-    }
+    const p = LocalPlaygroundState.getProfiles().find(x => x.uid === userId);
+    return p || null;
   },
 
   // Create Donation
@@ -422,244 +283,147 @@ export const FoodLinkService = {
       createdAt: new Date().toISOString()
     };
 
-    if (IS_PLAYGROUND_MOCK || !db) {
-      const list = LocalPlaygroundState.getDonations();
-      list.unshift(newDonation);
-      LocalPlaygroundState.saveDonations(list);
+    const list = LocalPlaygroundState.getDonations();
+    list.unshift(newDonation);
+    LocalPlaygroundState.saveDonations(list);
 
-      // Award points for listing!
-      const profiles = LocalPlaygroundState.getProfiles();
-      const donor = profiles.find(p => p.uid === data.donorId);
-      if (donor) {
-        donor.points += 50;
-        if (donor.points >= 200 && !donor.badges.includes("Community Saver")) {
-          donor.badges.push("Community Saver");
-        }
-        LocalPlaygroundState.saveProfiles(profiles);
+    // Award points for listing
+    const profiles = LocalPlaygroundState.getProfiles();
+    const donor = profiles.find(p => p.uid === data.donorId);
+    if (donor) {
+      donor.points += 50;
+      if (donor.points >= 200 && !donor.badges.includes("Community Saver")) {
+        donor.badges.push("Community Saver");
       }
-
-      // Add Notification
-      this.addAppNotification(
-        data.donorId,
-        `Success! Your surplus '${data.foodName}' is now listed for local collection.`
-      );
-
-      return newDonation;
+      LocalPlaygroundState.saveProfiles(profiles);
     }
 
-    const path = "donations";
-    try {
-      const docRef = doc(db, "donations", newDonation.id);
-      await setDoc(docRef, newDonation);
-      return newDonation;
-    } catch (err) {
-      return handleFirestoreError(err, OperationType.CREATE, path);
-    }
+    // Add Notification
+    this.addAppNotification(
+      data.donorId,
+      `Success! Your surplus '${data.foodName}' is now listed for local collection.`
+    );
+
+    return newDonation;
   },
 
   // Fetch Available Donations
   async getDonations(): Promise<Donation[]> {
-    if (IS_PLAYGROUND_MOCK || !db) {
-      return LocalPlaygroundState.getDonations();
-    }
-
-    const path = "donations";
-    try {
-      const q = query(collection(db, "donations"), orderBy("createdAt", "desc"));
-      const snap = await getDocs(q);
-      return snap.docs.map(d => ({ ...d.data(), id: d.id } as Donation));
-    } catch (err) {
-      return handleFirestoreError(err, OperationType.LIST, path);
-    }
+    return LocalPlaygroundState.getDonations();
   },
 
   // Real-time Donations Sync Listener
   subscribeDonations(callback: (donations: Donation[]) => void) {
-    if (IS_PLAYGROUND_MOCK || !db) {
-      // Simulate snapshot returns asynchronously
+    // Simulate snapshot returns asynchronously
+    callback(LocalPlaygroundState.getDonations());
+    const interval = setInterval(() => {
       callback(LocalPlaygroundState.getDonations());
-      const interval = setInterval(() => {
-        callback(LocalPlaygroundState.getDonations());
-      }, 3000);
-      return () => clearInterval(interval);
-    }
-
-    const path = "donations";
-    const q = query(collection(db, "donations"), orderBy("createdAt", "desc"));
-    return onSnapshot(q, (snap) => {
-      const list = snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as Donation));
-      callback(list);
-    }, (err) => {
-      handleFirestoreError(err, OperationType.GET, path);
-    });
+    }, 3000);
+    return () => clearInterval(interval);
   },
 
   // Claim Donation (Receiver)
   async claimDonation(donationId: string, receiverId: string, receiverName: string): Promise<boolean> {
-    if (IS_PLAYGROUND_MOCK || !db) {
-      const donations = LocalPlaygroundState.getDonations();
-      const don = donations.find(d => d.id === donationId);
-      if (!don || don.status !== "Available") return false;
+    const donations = LocalPlaygroundState.getDonations();
+    const don = donations.find(d => d.id === donationId);
+    if (!don || don.status !== "Available") return false;
 
-      don.status = "Reserved";
-      don.receiverId = receiverId;
-      if (don.price && don.price > 0) {
-        don.isPaid = true;
-        don.paymentEscrowState = "Holding";
-      } else {
-        don.paymentEscrowState = "None";
-      }
-      LocalPlaygroundState.saveDonations(donations);
-
-      // Create claim
-      const claims = LocalPlaygroundState.getClaims();
-      const newClaim: Claim = {
-        id: "cl-" + Math.random().toString(36).substr(2, 9),
-        donationId: don.id,
-        foodName: don.foodName,
-        quantity: don.quantity,
-        receiverId,
-        donorId: don.donorId,
-        donorName: don.donorName,
-        status: "Reserved",
-        claimedAt: new Date().toISOString()
-      };
-      claims.unshift(newClaim);
-      LocalPlaygroundState.saveClaims(claims);
-
-      // Notify donor
-      this.addAppNotification(
-        don.donorId,
-        `Important: User '${receiverName}' has Reserved your surplus listing '${don.foodName}'!`
-      );
-
-      // Notify receiver
-      this.addAppNotification(
-        receiverId,
-        don.price && don.price > 0 
-          ? `Funds secure: $${don.price.toFixed(2)} held in FoodLink Escrow. Verification code #FL-${Math.floor(1000 + Math.random() * 9000)} generated.`
-          : `Verification Code #FL-${Math.floor(1000 + Math.random() * 9000)} generated for claimed item '${don.foodName}'.`
-      );
-
-      return true;
+    don.status = "Reserved";
+    don.receiverId = receiverId;
+    if (don.price && don.price > 0) {
+      don.isPaid = true;
+      don.paymentEscrowState = "Holding";
+    } else {
+      don.paymentEscrowState = "None";
     }
+    LocalPlaygroundState.saveDonations(donations);
 
-    const path = `donations/${donationId}`;
-    try {
-      const dRef = doc(db, "donations", donationId);
-      const donationSnap = await getDoc(dRef);
-      if (!donationSnap.exists() || donationSnap.data().status !== "Available") {
-        return false;
-      }
+    // Create claim
+    const claims = LocalPlaygroundState.getClaims();
+    const newClaim: Claim = {
+      id: "cl-" + Math.random().toString(36).substr(2, 9),
+      donationId: don.id,
+      foodName: don.foodName,
+      quantity: don.quantity,
+      receiverId,
+      donorId: don.donorId,
+      donorName: don.donorName,
+      status: "Reserved",
+      claimedAt: new Date().toISOString()
+    };
+    claims.unshift(newClaim);
+    LocalPlaygroundState.saveClaims(claims);
 
-      const pVal = donationSnap.data().price || 0;
-      await updateDoc(dRef, {
-        status: "Reserved",
-        receiverId: receiverId,
-        isPaid: pVal > 0,
-        paymentEscrowState: pVal > 0 ? "Holding" : "None"
-      });
+    // Notify donor
+    this.addAppNotification(
+      don.donorId,
+      `Important: User '${receiverName}' has Reserved your surplus listing '${don.foodName}'!`
+    );
 
-      // Log Claim doc
-      const clId = "cl-" + Math.random().toString(36).substr(2, 9);
-      const data = donationSnap.data();
-      const newClaim: Claim = {
-        id: clId,
-        donationId,
-        foodName: data.foodName,
-        quantity: data.quantity,
-        receiverId,
-        donorId: data.donorId,
-        donorName: data.donorName,
-        status: "Reserved",
-        claimedAt: new Date().toISOString()
-      };
-      await setDoc(doc(db, "claims", clId), newClaim);
-      return true;
-    } catch (err) {
-      return handleFirestoreError(err, OperationType.UPDATE, path);
-    }
+    // Notify receiver
+    this.addAppNotification(
+      receiverId,
+      don.price && don.price > 0 
+        ? `Funds secure: $${don.price.toFixed(2)} held in FoodLink Escrow. Verification code #FL-${Math.floor(1000 + Math.random() * 9000)} generated.`
+        : `Verification Code #FL-${Math.floor(1000 + Math.random() * 9000)} generated for claimed item '${don.foodName}'.`
+    );
+
+    return true;
   },
 
   // Set Handover / Collected Complete
   async completeHandover(donationId: string, actorId: string): Promise<boolean> {
-    if (IS_PLAYGROUND_MOCK || !db) {
-      const donations = LocalPlaygroundState.getDonations();
-      const don = donations.find(d => d.id === donationId);
-      if (!don) return false;
+    const donations = LocalPlaygroundState.getDonations();
+    const don = donations.find(d => d.id === donationId);
+    if (!don) return false;
 
-      don.status = "Collected";
-      if (don.price && don.price > 0) {
-        don.paymentEscrowState = "Released";
-      }
-      LocalPlaygroundState.saveDonations(donations);
+    don.status = "Collected";
+    if (don.price && don.price > 0) {
+      don.paymentEscrowState = "Released";
+    }
+    LocalPlaygroundState.saveDonations(donations);
 
-      // Update Claim state
-      const claims = LocalPlaygroundState.getClaims();
-      const cl = claims.find(c => c.donationId === donationId);
-      if (cl) {
-        cl.status = "Collected";
-        LocalPlaygroundState.saveClaims(claims);
-      }
+    // Update Claim state
+    const claims = LocalPlaygroundState.getClaims();
+    const cl = claims.find(c => c.donationId === donationId);
+    if (cl) {
+      cl.status = "Collected";
+      LocalPlaygroundState.saveClaims(claims);
+    }
 
-      // Add points & check achievements
-      const profiles = LocalPlaygroundState.getProfiles();
-      const donor = profiles.find(p => p.uid === don.donorId);
-      if (donor) {
-        donor.points += 75;
-        if (donor.points >= 500 && !donor.badges.includes("Impact Champion")) {
-          donor.badges.push("Impact Champion");
-        }
+    // Add points & check achievements
+    const profiles = LocalPlaygroundState.getProfiles();
+    const donor = profiles.find(p => p.uid === don.donorId);
+    if (donor) {
+      donor.points += 75;
+      if (donor.points >= 500 && !donor.badges.includes("Impact Champion")) {
+        donor.badges.push("Impact Champion");
       }
-      const receiver = profiles.find(p => p.uid === don.receiverId);
-      if (receiver) {
-        receiver.points += 50;
-        if (receiver.points >= 150 && !receiver.badges.includes("Food Hero")) {
-          receiver.badges.push("Food Hero");
-        }
+    }
+    const receiver = profiles.find(p => p.uid === don.receiverId);
+    if (receiver) {
+      receiver.points += 50;
+      if (receiver.points >= 150 && !receiver.badges.includes("Food Hero")) {
+        receiver.badges.push("Food Hero");
       }
-      LocalPlaygroundState.saveProfiles(profiles);
+    }
+    LocalPlaygroundState.saveProfiles(profiles);
 
-      // Notification
+    // Notification
+    this.addAppNotification(
+      don.donorId,
+      don.price && don.price > 0
+        ? `Ecosystem Handover Complete! $${don.price.toFixed(2)} payout has been safely released to your account.`
+        : `Redistribution Complete! Outstanding effort — thank you for avoiding food waste.`
+    );
+    if (don.receiverId) {
       this.addAppNotification(
-        don.donorId,
-        don.price && don.price > 0
-          ? `Ecosystem Handover Complete! $${don.price.toFixed(2)} payout has been safely released to your account.`
-          : `Redistribution Complete! Outstanding effort — thank you for avoiding food waste.`
+        don.receiverId,
+        `Redistribution Complete! Escrow released. '${don.foodName}' is noted as successfully Collected.`
       );
-      if (don.receiverId) {
-        this.addAppNotification(
-          don.receiverId,
-          `Redistribution Complete! Escrow released. '${don.foodName}' is noted as successfully Collected.`
-        );
-      }
-
-      return true;
     }
 
-    const path = `donations/${donationId}`;
-    try {
-      const dRef = doc(db, "donations", donationId);
-      const donationSnap = await getDoc(dRef);
-      if (!donationSnap.exists()) return false;
-
-      const pVal = donationSnap.data().price || 0;
-      await updateDoc(dRef, { 
-        status: "Collected",
-        paymentEscrowState: pVal > 0 ? "Released" : "None"
-      });
-
-      // Update claims
-      const claimsQ = query(collection(db, "claims"), where("donationId", "==", donationId), limit(1));
-      const claimsSnap = await getDocs(claimsQ);
-      if (!claimsSnap.empty) {
-        const clDoc = claimsSnap.docs[0];
-        await updateDoc(doc(db, "claims", clDoc.id), { status: "Collected" });
-      }
-      return true;
-    } catch (err) {
-      return handleFirestoreError(err, OperationType.UPDATE, path);
-    }
+    return true;
   },
 
   // Save Notifications
@@ -697,7 +461,7 @@ export const FoodLinkService = {
     LocalPlaygroundState.saveNotifications(list);
   },
 
-  // Get Global Hackathon Impact Aggregates (Pillar 8 Optimizations)
+  // Get Global Hackathon Impact Aggregates
   getEcosystemImpactStats(): ImpactStats {
     return LocalPlaygroundState.getImpactStats();
   },
@@ -717,146 +481,63 @@ export const FoodLinkService = {
       .sort((a, b) => b.points - a.points);
   },
 
-  // Trigger Google Sign-in Popup securely inside the sandbox environment
+  // Trigger Google Sign-in Simulation
   async signInWithGoogleSecure(): Promise<UserProfile> {
-    if (IS_PLAYGROUND_MOCK || !auth || !googleProvider) {
-      // Simulate authentication flow securely
-      const names = [
-        "Gourav Kushwah",
-        "Savory Bistro Admin",
-        "Shelter Outreach Team",
-        "Catering Excellence",
-        "Eco-Minded Neighbor"
-      ];
-      const randomName = names[Math.floor(Math.random() * names.length)];
-      const randomUid = "user-" + Math.random().toString(36).substr(2, 9);
-      
-      const sessionProfile: UserProfile = {
-        uid: randomUid,
-        name: randomName,
-        email: `${randomName.toLowerCase().replace(/\s+/g, "")}@example.com`,
-        role: "donor", // Defaults to donor
-        points: 100,
-        badges: ["Food Hero"],
-        createdAt: new Date().toISOString()
-      };
+    const names = [
+      "Gourav Kushwah",
+      "Savory Bistro Admin",
+      "Shelter Outreach Team",
+      "Catering Excellence",
+      "Eco-Minded Neighbor"
+    ];
+    const randomName = names[Math.floor(Math.random() * names.length)];
+    const randomUid = "user-" + Math.random().toString(36).substr(2, 9);
+    
+    const sessionProfile: UserProfile = {
+      uid: randomUid,
+      name: randomName,
+      email: `${randomName.toLowerCase().replace(/\s+/g, "")}@example.com`,
+      role: "donor",
+      points: 100,
+      badges: ["Food Hero"],
+      createdAt: new Date().toISOString()
+    };
 
-      // Store in memory profiles list
-      const list = LocalPlaygroundState.getProfiles();
-      list.push(sessionProfile);
-      LocalPlaygroundState.saveProfiles(list);
+    const list = LocalPlaygroundState.getProfiles();
+    list.push(sessionProfile);
+    LocalPlaygroundState.saveProfiles(list);
 
-      return sessionProfile;
-    }
-
-    try {
-      const result = await signInWithPopup(auth, googleProvider);
-      const user = result.user;
-      
-      // Load standard profile or write a default
-      const profile = await this.saveUserProfile(
-        user.uid,
-        user.displayName || "Google User",
-        user.email || "",
-        "donor"
-      );
-      return profile;
-    } catch (error) {
-      console.error("Popup authenticated blocked. Reverting to sandbox simulation profile.", error);
-      throw error;
-    }
+    return sessionProfile;
   },
 
-  // Save OTP code linked to email coordinate (using Firebase Firestore or Local Storage)
+  // Save OTP code linked to email coordinate (using Local Storage)
   async saveOTP(email: string, code: string): Promise<boolean> {
     const cleanEmail = email.trim().toLowerCase();
-    if (IS_PLAYGROUND_MOCK || !db) {
-      localStorage.setItem(`foodlink_otp_${cleanEmail}`, JSON.stringify({
-        code,
-        createdAt: new Date().toISOString()
-      }));
-      return true;
-    }
-
-    const path = `otps/${cleanEmail}`;
-    try {
-      await setDoc(doc(db, "otps", cleanEmail), {
-        code,
-        createdAt: new Date().toISOString()
-      });
-      return true;
-    } catch (err) {
-      console.error("Firestore OTP write failed, fallback active:", err);
-      localStorage.setItem(`foodlink_otp_${cleanEmail}`, JSON.stringify({
-        code,
-        createdAt: new Date().toISOString()
-      }));
-      return true;
-    }
+    localStorage.setItem(`foodlink_otp_${cleanEmail}`, JSON.stringify({
+      code,
+      createdAt: new Date().toISOString()
+    }));
+    return true;
   },
 
   // Verify OTP code linked to email coordinate
   async verifyOTP(email: string, code: string): Promise<boolean> {
     const cleanEmail = email.trim().toLowerCase();
-    if (IS_PLAYGROUND_MOCK || !db) {
-      const stored = localStorage.getItem(`foodlink_otp_${cleanEmail}`);
-      if (!stored) return false;
-      const { code: savedCode } = JSON.parse(stored);
-      return String(savedCode).trim() === String(code).trim();
-    }
-
-    const path = `otps/${cleanEmail}`;
-    try {
-      const snap = await getDoc(doc(db, "otps", cleanEmail));
-      if (snap.exists()) {
-        const data = snap.data();
-        return String(data.code).trim() === String(code).trim();
-      }
-      const stored = localStorage.getItem(`foodlink_otp_${cleanEmail}`);
-      if (stored) {
-        const { code: savedCode } = JSON.parse(stored);
-        return String(savedCode).trim() === String(code).trim();
-      }
-      return false;
-    } catch (err) {
-      console.warn("Firestore verifyOTP failed, checking fallback:", err);
-      const stored = localStorage.getItem(`foodlink_otp_${cleanEmail}`);
-      if (!stored) return false;
-      const { code: savedCode } = JSON.parse(stored);
-      return String(savedCode).trim() === String(code).trim();
-    }
+    const stored = localStorage.getItem(`foodlink_otp_${cleanEmail}`);
+    if (!stored) return false;
+    const { code: savedCode } = JSON.parse(stored);
+    return String(savedCode).trim() === String(code).trim();
   },
 
-  // Find user profile by email key (or return default if not registered yet)
+  // Find user profile by email key
   async findProfileByEmail(email: string): Promise<UserProfile | null> {
     const cleanEmail = email.trim().toLowerCase();
-    if (IS_PLAYGROUND_MOCK || !db) {
-      const profiles = LocalPlaygroundState.getProfiles();
-      const match = profiles.find((p) => p.email.toLowerCase() === cleanEmail);
-      return match || null;
-    }
-
-    const path = "users";
-    try {
-      const q = query(collection(db, "users"), where("email", "==", cleanEmail), limit(1));
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        const uDoc = snap.docs[0];
-        return { ...uDoc.data(), uid: uDoc.id } as UserProfile;
-      }
-      return null;
-    } catch (err) {
-      console.warn("Firestore findProfileByEmail query failed, checking fallback state:", err);
-      const profiles = LocalPlaygroundState.getProfiles();
-      const match = profiles.find((p) => p.email.toLowerCase() === cleanEmail);
-      return match || null;
-    }
+    const profiles = LocalPlaygroundState.getProfiles();
+    const match = profiles.find((p) => p.email.toLowerCase() === cleanEmail);
+    return match || null;
   },
 
   async signOut() {
-    if (IS_PLAYGROUND_MOCK || !auth) {
-      return true;
-    }
-    await fbSignOut(auth);
+    return true;
   }
 };
